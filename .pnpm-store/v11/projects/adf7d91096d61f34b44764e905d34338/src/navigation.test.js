@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { resolvePage } from './navigation.js'
+import { resolvePage, legacyVerificationUrl } from './navigation.js'
 
 test('public pages remain accessible before and after login', () => {
   for (const user of [null, { role: 'participant' }, { role: 'admin' }]) {
@@ -32,7 +32,7 @@ test('page access follows the signed-in role', () => {
 
 test('attendance URLs preserve the symposium on Forward or reload', () => {
   assert.deepEqual(resolvePage('/attendance/42', { role: 'organizer' }), {
-    page: 'attendance', symposiumId: '42', allowed: true,
+    page: 'attendance', symposiumId: '42', allowed: true, certificateId: null,
   })
 })
 
@@ -40,4 +40,18 @@ test('unknown and incomplete routes are rejected instead of displaying a blank p
   for (const path of ['/missing', '/dashboard/extra', '/attendance', '/attendance/0', '/attendance/-1', '/attendance/no-id', '/attendance/1/extra']) {
     assert.equal(resolvePage(path, { role: 'admin' }).allowed, false, path)
   }
+})
+
+test('QR verification routes are public and retain the certificate ID', () => {
+  assert.deepEqual(resolvePage('/verify/test-id', null), {
+    page: 'verify', symposiumId: null, allowed: true, certificateId: 'test-id',
+  })
+  assert.equal(resolvePage('/verify/test-id/extra', null).allowed, false)
+})
+
+test('old PDF links are converted to hash routes without losing the ID', () => {
+  assert.equal(legacyVerificationUrl('http://localhost:5173/verify/test-id'), 'http://localhost:5173/#/verify/test-id')
+  assert.equal(legacyVerificationUrl('https://example.org/app/verify/test-id/?source=qr'), 'https://example.org/app/?source=qr#/verify/test-id')
+  assert.equal(legacyVerificationUrl('http://localhost:5173/#/verify/test-id'), null)
+  assert.equal(legacyVerificationUrl('http://localhost:5173/'), null)
 })

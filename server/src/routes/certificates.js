@@ -1,6 +1,7 @@
 'use strict';
 const express = require('express');
-const { randomUUID, createHash } = require('crypto');
+const { randomUUID } = require('crypto');
+const { certificateHash, verificationUrl } = require('../certificates/integrity');
 const PDFDocument = require('pdfkit');
 const QRCode = require('qrcode');
 const db = require('../db/database');
@@ -29,8 +30,8 @@ router.post('/generate', authenticate, requireRole('organizer', 'admin'), (req, 
         if (exists) continue;
         const uuid = randomUUID();
         const issueDate = new Date().toISOString();
-        const hash = createHash('sha256').update(`${uuid}|${reg.pname}|${symp.title}|${issueDate}`).digest('hex');
-        db.prepare(`INSERT INTO certificates (cert_uuid, user_id, symposium_id, registration_id, integrity_hash, generated_by) VALUES (?, ?, ?, ?, ?, ?)`).run(uuid, reg.user_id, bulk_symposium_id, reg.id, hash, req.user.id);
+        const hash = certificateHash(uuid, reg.pname, symp.title, issueDate);
+        db.prepare(`INSERT INTO certificates (cert_uuid, user_id, symposium_id, registration_id, issue_date, integrity_hash, generated_by) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(uuid, reg.user_id, bulk_symposium_id, reg.id, issueDate, hash, req.user.id);
         db.prepare(`UPDATE registrations SET status='certificate_issued', updated_at=datetime('now') WHERE id=?`).run(reg.id);
         logCertificate({ cert_uuid: uuid, user_id: reg.user_id, symposium_id: bulk_symposium_id, generated_by: req.user.id, action: 'generated', ip: req.ip });
         generated++;
@@ -50,8 +51,8 @@ router.post('/generate', authenticate, requireRole('organizer', 'admin'), (req, 
 
     const uuid = randomUUID();
     const issueDate = new Date().toISOString();
-    const hash = createHash('sha256').update(`${uuid}|${reg.pname}|${reg.stitle}|${issueDate}`).digest('hex');
-    db.prepare(`INSERT INTO certificates (cert_uuid, user_id, symposium_id, registration_id, integrity_hash, generated_by) VALUES (?, ?, ?, ?, ?, ?)`).run(uuid, reg.user_id, reg.symposium_id, reg.id, hash, req.user.id);
+    const hash = certificateHash(uuid, reg.pname, reg.stitle, issueDate);
+    db.prepare(`INSERT INTO certificates (cert_uuid, user_id, symposium_id, registration_id, issue_date, integrity_hash, generated_by) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(uuid, reg.user_id, reg.symposium_id, reg.id, issueDate, hash, req.user.id);
     db.prepare(`UPDATE registrations SET status='certificate_issued', updated_at=datetime('now') WHERE id=?`).run(reg.id);
 
     logCertificate({ cert_uuid: uuid, user_id: reg.user_id, symposium_id: reg.symposium_id, generated_by: req.user.id, action: 'generated', ip: req.ip });
@@ -97,13 +98,13 @@ router.get('/verify/:certId', optionalAuthenticate, (req, res) => {
     if (!cert) return res.status(404).json({ valid: false, error: 'Certificate not found or invalid.' });
 
     // Verify integrity hash
-    const expectedHash = createHash('sha256').update(`${cert.cert_uuid}|${cert.participant_name}|${cert.symposium_title}|${cert.issue_date}`).digest('hex');
-    const hashValid = expectedHash === cert.integrity_hash && !cert.revoked_at;
+    const expectedHash = certificateHash(cert.cert_uuid, cert.participant_name, cert.symposium_title, cert.issue_date);
+    const hashValid = expectedHash === cert.integrity_hash;
 
     logCertificate({ cert_uuid: cert.cert_uuid, user_id: cert.user_id, symposium_id: cert.symposium_id, generated_by: cert.generated_by, action: 'verified', ip: req.ip, details: `hash_valid:${hashValid}` });
 
     res.json({
-        valid: hashValid,
+        valid: hashValid && !cert.revoked_at,
         revoked: Boolean(cert.revoked_at),
         revocation_reason: cert.revoked_reason || null,
       certificate: {
@@ -147,7 +148,7 @@ router.get('/:certId/download', authenticate, async (req, res) => {
     logCertificate({ cert_uuid: cert.cert_uuid, user_id: cert.user_id, symposium_id: cert.symposium_id, generated_by: req.user.id, action: 'downloaded', ip: req.ip });
 
     // Generate QR code
-    const verifyUrl = `${APP_URL}/verify/${cert.cert_uuid}`;
+    const verifyUrl = verificationUrl(APP_URL, cert.cert_uuid);
     const qrDataUrl = await QRCode.toDataURL(verifyUrl, { width: 120, margin: 1 });
     const qrBase64 = qrDataUrl.replace('data:image/png;base64,', '');
     const qrBuffer = Buffer.from(qrBase64, 'base64');

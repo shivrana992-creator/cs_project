@@ -7,7 +7,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node src/db/seed.js",
-    "test:verify": "node test/verify-api.js"
+    "test:verify": "node --test test/certificates.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

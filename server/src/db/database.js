@@ -2,6 +2,7 @@
 const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
+const { repairLegacyIssueDates } = require('../certificates/integrity');
 
 const DB_DIR = path.join(__dirname, '../../data');
 const DB_PATH = path.join(DB_DIR, 'symposium.db');
@@ -253,5 +254,7 @@ function initializeDatabase() {
 }
 
 initializeDatabase();
+const repairedCertificates = repairLegacyIssueDates(db);
+if (repairedCertificates) console.log(`[DB] Recovered original issue timestamps for ${repairedCertificates} certificates.`);
 
 module.exports = db;

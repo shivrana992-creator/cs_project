@@ -163,7 +163,7 @@ async function seed() {
   console.log('[SEED] Registrations created.');
 
   // ─── Certificates ──────────────────────────────────────────────────────────
-  const { createHash } = require('crypto');
+  const { certificateHash } = require('../certificates/integrity');
   const certReg = db.prepare('SELECT id FROM registrations WHERE user_id=? AND symposium_id=? AND status=?')
     .get(stuId, sympIds[2], 'certificate_issued');
 
@@ -174,10 +174,10 @@ async function seed() {
       const symp = db.prepare('SELECT title FROM symposiums WHERE id=?').get(sympIds[2]);
       const user = db.prepare('SELECT name, email FROM users WHERE id=?').get(stuId);
       const issueDate = new Date().toISOString();
-      const hash = createHash('sha256').update(`${certUUID}|${user.name}|${symp.title}|${issueDate}`).digest('hex');
-      db.prepare(`INSERT INTO certificates (cert_uuid, user_id, symposium_id, registration_id, integrity_hash, generated_by)
-                  VALUES (?, ?, ?, ?, ?, ?)`)
-        .run(certUUID, stuId, sympIds[2], certReg.id, hash, orgId);
+      const hash = certificateHash(certUUID, user.name, symp.title, issueDate);
+      db.prepare(`INSERT INTO certificates (cert_uuid, user_id, symposium_id, registration_id, issue_date, integrity_hash, generated_by)
+                  VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(certUUID, stuId, sympIds[2], certReg.id, issueDate, hash, orgId);
       console.log('[SEED] Certificate created, UUID:', certUUID);
 
       // Certificate log
@@ -197,10 +197,10 @@ async function seed() {
       const symp2 = db.prepare('SELECT title FROM symposiums WHERE id=?').get(sympIds[0]);
       const user2 = db.prepare('SELECT name FROM users WHERE id=?').get(stuId);
       const issueDate2 = new Date().toISOString();
-      const hash2 = createHash('sha256').update(`${certUUID2}|${user2.name}|${symp2.title}|${issueDate2}`).digest('hex');
-      db.prepare(`INSERT INTO certificates (cert_uuid, user_id, symposium_id, registration_id, integrity_hash, generated_by)
-                  VALUES (?, ?, ?, ?, ?, ?)`)
-        .run(certUUID2, stuId, sympIds[0], certReg2.id, hash2, orgId);
+      const hash2 = certificateHash(certUUID2, user2.name, symp2.title, issueDate2);
+      db.prepare(`INSERT INTO certificates (cert_uuid, user_id, symposium_id, registration_id, issue_date, integrity_hash, generated_by)
+                  VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(certUUID2, stuId, sympIds[0], certReg2.id, issueDate2, hash2, orgId);
     }
   }
 
