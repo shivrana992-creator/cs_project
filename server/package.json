@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node src/db/seed.js",
-    "test:verify": "node --test test/certificates.test.js"
+    "test:verify": "node --test test/certificates.test.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
@@ -17,6 +18,7 @@
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^10.0.15",
     "otplib": "^12.0.1",
     "pdfkit": "^0.16.0",
     "qrcode": "^1.5.4"

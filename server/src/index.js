@@ -4,6 +4,8 @@ const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
+const fs = require('fs');
 const db = require('./db/database');
 const { activityLogger } = require('./middleware/accounting');
 
@@ -17,15 +19,21 @@ app.use(helmet({
 }));
 
 // Rate limiting
-const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, message: { error: 'Too many requests. Please try again later.' } });
+const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 1000, message: { error: 'Too many requests. Please try again later.' } });
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: 'Too many login attempts. Please try again in 15 minutes.' } });
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
+app.use('/api/auth/forgot-password', authLimiter);
+app.use('/api/auth/resend-verification', authLimiter);
 app.use('/api/', generalLimiter);
 
+app.use('/api/payments/webhook', require('./payments/webhook'));
+
 // CORS
+const allowedOrigins = process.env.NODE_ENV === 'production' ? [] : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173'];
+if (process.env.APP_URL) allowedOrigins.push(new URL(process.env.APP_URL).origin);
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173'],
+  origin: allowedOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -60,6 +68,12 @@ app.get('/api/health', (req, res) => {
   };
   res.json(stats);
 });
+
+const clientDist = path.join(__dirname, '../../client/dist');
+if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+  app.use(express.static(clientDist));
+  app.get(/^(?!\/api(?:\/|$)).*/, (req, res) => res.sendFile(path.join(clientDist, 'index.html')));
+}
 
 // ── 404 Handler ───────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.path} not found.` }));

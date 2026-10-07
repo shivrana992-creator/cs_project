@@ -1,4 +1,4 @@
-const publicPages = new Set(['browse', 'verify', 'docs'])
+const publicPages = new Set(['browse', 'verify', 'verify-email', 'reset-password', 'docs'])
 const pageRoles = {
   dashboard: ['participant', 'organizer', 'coordinator', 'admin'],
   notifications: ['participant', 'organizer', 'coordinator', 'admin'],
@@ -8,15 +8,17 @@ const pageRoles = {
   manage: ['organizer', 'coordinator', 'admin'],
   attendance: ['organizer', 'admin'],
   admin: ['admin'],
+  logs: ['admin'],
 }
 
 export function resolvePage(pathname, user) {
   const [name, id, ...extra] = pathname.split('/').filter(Boolean)
   const page = name || 'browse'
   const symposiumId = page === 'attendance' && /^[1-9]\d*$/.test(id || '') ? id : null
-  const validPath = extra.length === 0 && (page === 'attendance' ? !!symposiumId : page === 'verify' || !id)
+  const accountTokenPage = ['verify-email', 'reset-password'].includes(page)
+  const validPath = extra.length === 0 && (page === 'attendance' ? !!symposiumId : accountTokenPage ? !!id : page === 'verify' || !id)
   const allowed = validPath && (publicPages.has(page) || pageRoles[page]?.includes(user?.role))
-  return { page, symposiumId, allowed: !!allowed, certificateId: page === 'verify' ? id || null : null }
+  return { page, symposiumId, allowed: !!allowed, certificateId: page === 'verify' ? id || null : null, accountToken: accountTokenPage ? id || null : null }
 }
 
 export function legacyVerificationUrl(href) {

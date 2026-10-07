@@ -85,7 +85,7 @@ router.post('/', authenticate, requireRole('organizer', 'admin'), (req, res) => 
     if (deadline >= start) {
       return res.status(400).json({ error: 'Registration deadline must be before the start date.' });
     }
-    if (!Number.isFinite(Number(fee)) || Number(fee) < 0 || !Number.isInteger(Number(capacity)) || Number(capacity) < 1 || Number(capacity) > 100000) return res.status(400).json({ error: 'Fee must be non-negative and capacity must be between 1 and 100000.' });
+    if (!Number.isFinite(Number(fee)) || Number(fee) < 0 || Math.abs(Number(fee) * 100 - Math.round(Number(fee) * 100)) > 0.000001 || !Number.isInteger(Number(capacity)) || Number(capacity) < 1 || Number(capacity) > 100000) return res.status(400).json({ error: 'Fee must be non-negative with at most two decimal places; capacity must be between 1 and 100000.' });
 
     const status = req.user.role === 'admin' ? 'approved' : 'pending_approval';
     const result = db.prepare(`
@@ -115,7 +115,7 @@ router.post('/', authenticate, requireRole('organizer', 'admin'), (req, res) => 
 });
 
 // ── PUT /api/symposiums/:id ────────────────────────────────────────────────────
-router.put('/:id', authenticate, requireRole('organizer', 'admin', 'coordinator'), (req, res) => {
+router.put('/:id', authenticate, requireRole('organizer', 'admin'), (req, res) => {
   try {
     const symp = db.prepare('SELECT * FROM symposiums WHERE id = ?').get(req.params.id);
     if (!symp) return res.status(404).json({ error: 'Symposium not found.' });
@@ -124,7 +124,7 @@ router.put('/:id', authenticate, requireRole('organizer', 'admin', 'coordinator'
     const { title, description, category, location, start_date, end_date, registration_deadline, fee, capacity, banner_color } = req.body;
     if (title !== undefined && (typeof title !== 'string' || !title.trim() || title.length > 200)) return res.status(400).json({ error: 'Title must be 1 to 200 characters.' });
     if (location !== undefined && (typeof location !== 'string' || !location.trim() || location.length > 200)) return res.status(400).json({ error: 'Location must be 1 to 200 characters.' });
-    if (fee !== undefined && (!Number.isFinite(Number(fee)) || Number(fee) < 0)) return res.status(400).json({ error: 'Fee must be a non-negative number.' });
+    if (fee !== undefined && (!Number.isFinite(Number(fee)) || Number(fee) < 0 || Math.abs(Number(fee) * 100 - Math.round(Number(fee) * 100)) > 0.000001)) return res.status(400).json({ error: 'Fee must be non-negative with at most two decimal places.' });
     if (capacity !== undefined && (!Number.isInteger(Number(capacity)) || Number(capacity) < 1 || Number(capacity) > 100000)) return res.status(400).json({ error: 'Capacity must be between 1 and 100000.' });
     const updatedStart = Date.parse(start_date || symp.start_date), updatedEnd = Date.parse(end_date || symp.end_date), updatedDeadline = Date.parse(registration_deadline || symp.registration_deadline);
     if (![updatedStart, updatedEnd, updatedDeadline].every(Number.isFinite) || updatedEnd < updatedStart || updatedDeadline >= updatedStart) return res.status(400).json({ error: 'Event dates or registration deadline are invalid.' });

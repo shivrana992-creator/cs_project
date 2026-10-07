@@ -1,0 +1,11 @@
+.menu-toggle{display:none;border:1px solid var(--border);background:#fff;border-radius:9px;padding:8px;cursor:pointer;color:var(--text)}
+@media(max-width:800px){
+  .topbar{position:sticky;flex-wrap:wrap;gap:10px}
+  .topbar .menu-toggle{display:inline-flex;margin-left:auto}
+  .topbar nav{position:absolute;top:100%;left:0;right:0;padding:12px 18px 18px;background:#fff;border-bottom:1px solid var(--border);box-shadow:var(--shadow);flex-direction:column;max-height:calc(100vh - 70px);overflow-y:auto}
+  .topbar nav:not(.nav-open){display:none}
+  .topbar nav.nav-open{display:flex;align-items:stretch}
+  .topbar nav.nav-open>button:not(.btn):not(.profile){display:flex}
+  .topbar nav.nav-open>button{text-align:left;justify-content:flex-start;min-height:40px}
+  .topbar nav.nav-open .profile{font-size:14px!important}
+}

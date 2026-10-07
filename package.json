@@ -2,11 +2,14 @@
   "name": "symposihub",
   "private": true,
   "version": "1.0.0",
+  "workspaces": ["client", "server"],
   "scripts": {
     "dev": "concurrently \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
     "seed": "npm --prefix server run seed",
     "build": "npm --prefix client run build",
-    "start": "npm --prefix server start"
+    "start": "npm --prefix server start",
+    "test": "npm --prefix client test && npm --prefix server test",
+    "lint": "npm --prefix client run lint"
   },
   "devDependencies": { "concurrently": "^9.2.1" }
 }

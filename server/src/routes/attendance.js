@@ -31,6 +31,7 @@ router.get('/qr/:registrationId', authenticate, async (req, res) => {
     if (req.user.role === 'participant' && reg.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied.' });
     if (req.user.role === 'organizer' && reg.organizer_id !== req.user.id) return res.status(403).json({ error: 'Access denied.' });
     if (!['participant', 'organizer', 'admin', 'coordinator'].includes(req.user.role)) return res.status(403).json({ error: 'Access denied.' });
+    if (!['confirmed', 'attended', 'certificate_issued'].includes(reg.status)) return res.status(410).json({ error: 'Check-in is unavailable for this registration.' });
     if (!reg.checkin_token) return res.status(404).json({ error: 'No check-in code is available for this registration.' });
     const png = await QRCode.toBuffer(reg.checkin_token, { type: 'png', width: 240, margin: 2 });
     res.setHeader('Content-Type', 'image/png');
@@ -49,13 +50,13 @@ router.post('/mark', authenticate, requireRole('organizer', 'admin'), (req, res)
       let count = 0;
       for (const item of bulk) {
         const reg = db.prepare('SELECT * FROM registrations WHERE id = ?').get(item.registration_id);
-        if (!reg || reg.status === 'cancelled') continue;
+        if (!reg || !['confirmed', 'attended'].includes(reg.status)) continue;
         if (req.user.role === 'organizer') {
           const symp = db.prepare('SELECT organizer_id FROM symposiums WHERE id = ?').get(reg.symposium_id);
           if (symp.organizer_id !== req.user.id) continue;
         }
-        const attended = item.present ? 1 : 0;
-        const newStatus = attended ? 'attended' : reg.status === 'attended' ? 'confirmed' : reg.status;
+        const attended = item.present === true || item.present === 1 ? 1 : 0;
+        const newStatus = attended ? 'attended' : 'confirmed';
         db.prepare(`UPDATE registrations SET attendance_marked=?, status=?, updated_at=datetime('now') WHERE id=?`).run(attended, newStatus, reg.id);
         logAttendance({ user_id: reg.user_id, symposium_id: reg.symposium_id, registration_id: reg.id, marked_by: req.user.id, action: 'bulk_marked', details: `present:${attended}`, ip: req.ip });
         count++;

@@ -5,7 +5,8 @@ const { DatabaseSync } = require('node:sqlite');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const QRCode = require('qrcode');
-const { certificateHash, recoverIssueDate, repairLegacyIssueDates, verificationUrl } = require('../src/certificates/integrity');
+const { installTestSessions } = require('./support/session');
+const { certificateHash, signCertificate, verifyCertificate, recoverIssueDate, repairLegacyIssueDates, verificationUrl } = require('../src/certificates/integrity');
 
 // Exercise the real routes and middleware without touching the project database.
 const db = new DatabaseSync(':memory:');
@@ -14,7 +15,7 @@ db.exec(`
   CREATE TABLE symposiums (id INTEGER PRIMARY KEY, title TEXT, start_date TEXT, end_date TEXT, location TEXT, category TEXT, banner_color TEXT, organizer_id INTEGER);
   CREATE TABLE registrations (id INTEGER PRIMARY KEY, user_id INTEGER, symposium_id INTEGER, attendance_marked INTEGER, status TEXT, updated_at TEXT);
   CREATE TABLE certificates (id INTEGER PRIMARY KEY, cert_uuid TEXT UNIQUE, user_id INTEGER, symposium_id INTEGER, registration_id INTEGER,
-    issue_date TEXT NOT NULL DEFAULT (datetime('now')), integrity_hash TEXT, generated_by INTEGER, revoked_at TEXT, revoked_reason TEXT,
+    issue_date TEXT NOT NULL DEFAULT (datetime('now')), integrity_hash TEXT, integrity_algorithm TEXT NOT NULL DEFAULT 'sha256', generated_by INTEGER, revoked_at TEXT, revoked_reason TEXT,
     download_count INTEGER DEFAULT 0, last_downloaded_at TEXT, created_at TEXT DEFAULT (datetime('now')));
   CREATE TABLE certificate_logs (id INTEGER PRIMARY KEY, cert_uuid TEXT, user_id INTEGER, symposium_id INTEGER, generated_by INTEGER, action TEXT, ip_address TEXT, details TEXT);
   CREATE TABLE audit_logs (id INTEGER PRIMARY KEY, actor_id INTEGER, actor_role TEXT, action TEXT, resource_type TEXT, resource_id INTEGER, old_value TEXT, new_value TEXT, severity TEXT, ip_address TEXT);
@@ -22,6 +23,7 @@ db.exec(`
   INSERT INTO symposiums VALUES (1,'Test Symposium','2026-09-01','2026-09-02','Test Venue','Technology','#4f46e5',1), (2,'Bulk Symposium','2026-09-01','2026-09-02','Test Venue','Technology','#4f46e5',1);
   INSERT INTO registrations VALUES (1,2,1,1,'attended',NULL), (2,2,2,1,'attended',NULL);
 `);
+const issueTestSession = installTestSessions(db);
 const dbModule = require.resolve('../src/db/database');
 require.cache[dbModule] = { id: dbModule, filename: dbModule, loaded: true, exports: db };
 const { JWT_SECRET } = require('../src/middleware/auth');
@@ -30,7 +32,7 @@ const app = express();
 app.use(express.json());
 app.use('/api/certificates', router);
 let server, baseUrl, singleId, bulkId;
-const authHeaders = { Authorization: `Bearer ${jwt.sign({ id: 1 }, JWT_SECRET)}`, 'Content-Type': 'application/json' };
+const authHeaders = { Authorization: `Bearer ${issueTestSession(1, JWT_SECRET)}`, 'Content-Type': 'application/json' };
 
 before(async () => {
   server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
@@ -72,6 +74,21 @@ test('changing signed fields fails verification', async () => {
     assert.equal(result.valid, false);
     assert.equal(result.certificate.hash_verified, false);
   } finally { db.prepare('UPDATE users SET name=? WHERE id=2').run('Test Participant'); }
+});
+
+test('new signatures use the configured secret and reject tampering', () => {
+  const previous = process.env.CERTIFICATE_SIGNING_KEY;
+  process.env.CERTIFICATE_SIGNING_KEY = 'test-secret-that-is-long-enough-for-signing';
+  try {
+    const cert = { cert_uuid: 'signed-test', participant_name: 'Participant', symposium_title: 'Symposium', issue_date: '2026-10-05T10:00:00.000Z' };
+    Object.assign(cert, signCertificate(cert.cert_uuid, cert.participant_name, cert.symposium_title, cert.issue_date));
+    assert.equal(cert.integrity_algorithm, 'hmac-sha256');
+    assert.equal(verifyCertificate(cert), true);
+    assert.equal(verifyCertificate({ ...cert, participant_name: 'Changed' }), false);
+  } finally {
+    if (previous === undefined) delete process.env.CERTIFICATE_SIGNING_KEY;
+    else process.env.CERTIFICATE_SIGNING_KEY = previous;
+  }
 });
 
 test('downloaded PDF QR links open the public certificate route', async () => {

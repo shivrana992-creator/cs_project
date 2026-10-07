@@ -1,13 +1,14 @@
 'use strict';
+require('../config');
 const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
 const { repairLegacyIssueDates } = require('../certificates/integrity');
 
-const DB_DIR = path.join(__dirname, '../../data');
-const DB_PATH = path.join(DB_DIR, 'symposium.db');
+const DB_PATH = process.env.DB_PATH === ':memory:' ? ':memory:' : process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.join(__dirname, '../../data/symposium.db');
+const DB_DIR = DB_PATH === ':memory:' ? null : path.dirname(DB_PATH);
 
-if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+if (DB_DIR && !fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 
 const db = new DatabaseSync(DB_PATH);
 
@@ -31,6 +32,18 @@ function initializeDatabase() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      revoked_at INTEGER,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
   `);
 
   db.exec(`
@@ -79,7 +92,10 @@ function initializeDatabase() {
       status TEXT NOT NULL DEFAULT 'registered' CHECK(status IN ('registered','pending_payment','confirmed','attended','certificate_issued','cancelled')),
       payment_status TEXT NOT NULL DEFAULT 'pending' CHECK(payment_status IN ('pending','paid','free','refunded')),
       payment_reference TEXT,
+      payment_order_id TEXT,
       payment_method TEXT,
+      refund_reference TEXT,
+      refund_status TEXT,
       amount_paid REAL DEFAULT 0,
       attendance_marked INTEGER DEFAULT 0,
       checkin_token TEXT UNIQUE,
@@ -101,6 +117,7 @@ function initializeDatabase() {
       registration_id INTEGER NOT NULL,
       issue_date TEXT NOT NULL DEFAULT (datetime('now')),
       integrity_hash TEXT NOT NULL,
+      integrity_algorithm TEXT NOT NULL DEFAULT 'sha256',
       revoked_at TEXT,
       revoked_reason TEXT,
       generated_by INTEGER NOT NULL,
@@ -120,8 +137,12 @@ function initializeDatabase() {
   const certificateColumns = db.prepare('PRAGMA table_info(certificates)').all().map(c => c.name);
   if (!certificateColumns.includes('revoked_at')) db.exec('ALTER TABLE certificates ADD COLUMN revoked_at TEXT');
   if (!certificateColumns.includes('revoked_reason')) db.exec('ALTER TABLE certificates ADD COLUMN revoked_reason TEXT');
+  if (!certificateColumns.includes('integrity_algorithm')) db.exec("ALTER TABLE certificates ADD COLUMN integrity_algorithm TEXT NOT NULL DEFAULT 'sha256'");
   const registrationColumns = db.prepare('PRAGMA table_info(registrations)').all().map(c => c.name);
   if (!registrationColumns.includes('checkin_token')) db.exec('ALTER TABLE registrations ADD COLUMN checkin_token TEXT');
+  if (!registrationColumns.includes('payment_order_id')) db.exec('ALTER TABLE registrations ADD COLUMN payment_order_id TEXT');
+  if (!registrationColumns.includes('refund_reference')) db.exec('ALTER TABLE registrations ADD COLUMN refund_reference TEXT');
+  if (!registrationColumns.includes('refund_status')) db.exec('ALTER TABLE registrations ADD COLUMN refund_status TEXT');
 
   db.exec(`CREATE TABLE IF NOT EXISTS notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,10 +263,8 @@ function initializeDatabase() {
   if (existing.c === 0) {
     const insertSetting = db.prepare("INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)");
     insertSetting.run('session_timeout_minutes', '30');
-    insertSetting.run('mfa_enforcement', 'optional');
     insertSetting.run('allow_self_registration', 'true');
     insertSetting.run('max_registrations_per_user', '10');
-    insertSetting.run('certificate_template_color', '#1e3a5f');
     insertSetting.run('site_name', 'SymposiHub');
     insertSetting.run('contact_email', 'admin@symposium.edu');
   }

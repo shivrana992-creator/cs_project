@@ -1,0 +1,9 @@
+node_modules/
+.pnpm-store/
+client/dist/
+server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
+.env
+.env.*
+!.env.example

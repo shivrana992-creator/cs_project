@@ -1,0 +1,9 @@
+.logs-panel{padding:25px;display:flex;flex-direction:column;gap:18px}
+.logs-panel>label{display:flex;flex-direction:column;gap:6px;max-width:260px;font-weight:700;font-size:13px}
+.logs-panel table{width:100%;border-collapse:collapse}
+.logs-panel th,.logs-panel td{text-align:left;padding:12px;border-bottom:1px solid var(--border);vertical-align:top}
+.logs-panel th{font-size:12px;color:var(--text-muted)}
+.logs-panel td{font-size:13px}
+.logs-panel summary{cursor:pointer;color:var(--primary);font-weight:700}
+.logs-panel pre{max-width:480px;max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:11px}
+.logs-pagination{display:flex;justify-content:flex-end;align-items:center;gap:12px}

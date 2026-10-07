@@ -1,8 +1,35 @@
 'use strict';
-const { createHash } = require('node:crypto');
+const { createHash, createHmac, timingSafeEqual } = require('node:crypto');
+
+if (process.env.NODE_ENV === 'production' && (!process.env.CERTIFICATE_SIGNING_KEY || process.env.CERTIFICATE_SIGNING_KEY.length < 32)) {
+  throw new Error('CERTIFICATE_SIGNING_KEY must be at least 32 characters in production.');
+}
+
+function certificatePayload(uuid, participantName, symposiumTitle, issueDate) {
+  return `${uuid}|${participantName}|${symposiumTitle}|${issueDate}`;
+}
 
 function certificateHash(uuid, participantName, symposiumTitle, issueDate) {
-  return createHash('sha256').update(`${uuid}|${participantName}|${symposiumTitle}|${issueDate}`).digest('hex');
+  return createHash('sha256').update(certificatePayload(uuid, participantName, symposiumTitle, issueDate)).digest('hex');
+}
+
+function signCertificate(uuid, participantName, symposiumTitle, issueDate) {
+  const key = process.env.CERTIFICATE_SIGNING_KEY;
+  if (!key) return { integrity_hash: certificateHash(uuid, participantName, symposiumTitle, issueDate), integrity_algorithm: 'sha256' };
+  return { integrity_hash: createHmac('sha256', key).update(certificatePayload(uuid, participantName, symposiumTitle, issueDate)).digest('hex'), integrity_algorithm: 'hmac-sha256' };
+}
+
+function verifyCertificate(cert) {
+  const algorithm = cert.integrity_algorithm || 'sha256';
+  let expected;
+  if (algorithm === 'hmac-sha256') {
+    if (!process.env.CERTIFICATE_SIGNING_KEY) return false;
+    expected = signCertificate(cert.cert_uuid, cert.participant_name, cert.symposium_title, cert.issue_date).integrity_hash;
+  } else if (algorithm === 'sha256') {
+    expected = certificateHash(cert.cert_uuid, cert.participant_name, cert.symposium_title, cert.issue_date);
+  } else return false;
+  if (!/^[a-f0-9]{64}$/.test(cert.integrity_hash || '')) return false;
+  return timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(cert.integrity_hash, 'hex'));
 }
 
 function recoverIssueDate(cert) {
@@ -49,4 +76,4 @@ function verificationUrl(appUrl, uuid) {
   return url.href;
 }
 
-module.exports = { certificateHash, recoverIssueDate, repairLegacyIssueDates, verificationUrl };
+module.exports = { certificateHash, signCertificate, verifyCertificate, recoverIssueDate, repairLegacyIssueDates, verificationUrl };

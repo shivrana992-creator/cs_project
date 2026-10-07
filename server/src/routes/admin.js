@@ -89,7 +89,17 @@ router.get('/settings', authenticate, requireRole('admin'), (req, res) => {
 // ── PUT /api/admin/settings ────────────────────────────────────────────────────
 router.put('/settings', authenticate, requireRole('admin'), (req, res) => {
   try {
-    const allowed = ['session_timeout_minutes', 'mfa_enforcement', 'allow_self_registration', 'max_registrations_per_user', 'certificate_template_color', 'site_name', 'contact_email'];
+    const allowed = ['session_timeout_minutes', 'allow_self_registration', 'max_registrations_per_user', 'site_name', 'contact_email'];
+    const validators = {
+      session_timeout_minutes: value => Number.isInteger(Number(value)) && Number(value) >= 5 && Number(value) <= 480,
+      allow_self_registration: value => value === 'true' || value === 'false' || value === true || value === false,
+      max_registrations_per_user: value => Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 100,
+      site_name: value => typeof value === 'string' && value.trim().length >= 1 && value.trim().length <= 80,
+      contact_email: value => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+    };
+    for (const [key, value] of Object.entries(req.body)) {
+      if (allowed.includes(key) && !validators[key](value)) return res.status(400).json({ error: `Invalid ${key}.` });
+    }
     const old = {};
     for (const [key, value] of Object.entries(req.body)) {
       if (!allowed.includes(key)) continue;

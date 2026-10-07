@@ -8,6 +8,13 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 }
 const JWT_SECRET = process.env.JWT_SECRET || randomBytes(32).toString('hex');
 
+function hasActiveSession(decoded) {
+  if (!decoded.jti) return false;
+  const session = db.prepare('SELECT user_id, expires_at, revoked_at FROM auth_sessions WHERE id = ?').get(decoded.jti);
+  return !!session && session.user_id === decoded.id && session.revoked_at === null
+    && session.expires_at > Math.floor(Date.now() / 1000);
+}
+
 function authenticate(req, res, next) {
   try {
     const token = req.cookies?.token || (req.headers.authorization?.startsWith('Bearer ') && req.headers.authorization.slice(7));
@@ -24,9 +31,10 @@ function authenticate(req, res, next) {
     }
 
     // MFA check: if mfa_pending is set, block access to all routes except MFA verification
-    if (decoded.mfa_pending && !req.path.startsWith('/api/auth/mfa')) {
+    if (decoded.mfa_pending) {
       return res.status(403).json({ error: 'MFA verification required.', code: 'MFA_REQUIRED' });
     }
+    if (!hasActiveSession(decoded)) return res.status(401).json({ error: 'Session ended. Please log in again.', code: 'SESSION_ENDED' });
 
     const user = db.prepare('SELECT id, name, email, role, mfa_enabled, is_active FROM users WHERE id = ?').get(decoded.id);
     if (!user) return res.status(401).json({ error: 'User not found. Please log in again.' });
@@ -47,6 +55,7 @@ function optionalAuthenticate(req, res, next) {
     if (!token) { req.user = null; return next(); }
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
+      if (decoded.mfa_pending || !hasActiveSession(decoded)) { req.user = null; return next(); }
       const user = db.prepare('SELECT id, name, email, role, mfa_enabled, is_active FROM users WHERE id = ?').get(decoded.id);
       req.user = (user && user.is_active) ? user : null;
     } catch {

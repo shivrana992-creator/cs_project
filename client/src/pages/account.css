@@ -1,0 +1,6 @@
+.account-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}
+.account-grid .account{width:100%;max-width:none}
+.account-grid .event-form{padding:25px}
+.account-grid .event-form p,.account-grid small{color:var(--text-muted);font-size:13px}
+.backup-codes{display:block;white-space:normal;line-height:1.8;word-break:break-word;background:#f8fafc;padding:12px;border-radius:8px}
+@media(max-width:800px){.account-grid{grid-template-columns:1fr}}

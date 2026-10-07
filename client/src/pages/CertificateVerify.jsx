@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import client from '../api/client'
 
 export default function CertificateVerify({ certificateId }) {
-  const [id, setId] = useState(certificateId || '')
+  const [id, setId] = useState(() => {
+    try { return decodeURIComponent(certificateId || '') } catch { return certificateId || '' }
+  })
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -34,12 +36,8 @@ export default function CertificateVerify({ certificateId }) {
   useEffect(() => {
     let linkedId = certificateId || ''
     try { linkedId = decodeURIComponent(linkedId) } catch { /* Invalid escapes are sent as an unknown ID. */ }
-    setId(linkedId)
-    setResult(null)
-    setError('')
-    setLoading(false)
-    if (linkedId) verify(linkedId)
-    return () => request.current?.abort()
+    const timer = linkedId ? setTimeout(() => verify(linkedId), 0) : null
+    return () => { if (timer) clearTimeout(timer); request.current?.abort() }
   }, [certificateId, verify])
 
   const submit = e => { e.preventDefault(); verify(id) }

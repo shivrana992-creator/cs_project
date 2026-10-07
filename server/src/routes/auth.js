@@ -8,17 +8,35 @@ const { randomUUID, randomBytes, createHash } = require('crypto');
 const db = require('../db/database');
 const { JWT_SECRET } = require('../middleware/auth');
 const { logLogin, logAudit, logActivity } = require('../middleware/accounting');
+const { setting, sessionMinutes } = require('../settings');
+const { sendAccountEmail } = require('../mail');
 
 const router = express.Router();
 
 const ISSUER = 'SymposiHub';
 
 function issueToken(user, extra = {}) {
-  return jwt.sign(
-    { id: user.id, email: user.email, role: user.role, name: user.name, ...extra },
+  const sessionId = randomUUID();
+  const token = jwt.sign(
+    { id: user.id, email: user.email, role: user.role, name: user.name, ...extra, jti: sessionId },
     JWT_SECRET,
-    { expiresIn: '8h' }
+    { expiresIn: `${sessionMinutes()}m` }
   );
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?').run(now);
+  db.prepare('INSERT INTO auth_sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
+    .run(sessionId, user.id, jwt.decode(token).exp, now);
+  return token;
+}
+
+function revokePreviousCookieSession(req) {
+  if (!req.cookies?.token) return;
+  let previous;
+  try {
+    previous = jwt.verify(req.cookies.token, JWT_SECRET);
+  } catch { return; }
+  if (previous.jti) db.prepare('UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL')
+    .run(Math.floor(Date.now() / 1000), previous.jti);
 }
 
 function setCookie(res, token) {
@@ -26,13 +44,14 @@ function setCookie(res, token) {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 8 * 60 * 60 * 1000, // 8 hours
+    maxAge: sessionMinutes() * 60 * 1000,
   });
 }
 
 // ── POST /api/auth/register ──────────────────────────────────────────────────
-router.post('/register', (req, res) => {
+router.post('/register', async (req, res) => {
   try {
+    if (setting('allow_self_registration', 'true') !== 'true') return res.status(403).json({ error: 'Self registration is currently disabled.' });
     const { name, email, password } = req.body;
     if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required.' });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Invalid email address.' });
@@ -48,6 +67,7 @@ router.post('/register', (req, res) => {
     const result = db.prepare('INSERT INTO users (name, email, password_hash, role, email_verified) VALUES (?, ?, ?, ?, 0)').run(name.trim(), email.toLowerCase(), hash, 'participant');
     const verification = randomBytes(32).toString('hex');
     db.prepare("INSERT INTO account_tokens (user_id,purpose,token_hash,expires_at) VALUES (?,'email_verification',?,datetime('now','+24 hours'))").run(result.lastInsertRowid, createHash('sha256').update(verification).digest('hex'));
+    await sendAccountEmail(email.toLowerCase(), 'email_verification', verification);
 
     logActivity({ user_id: result.lastInsertRowid, role: 'participant', action: 'user_registered', resource_type: 'user', resource_id: result.lastInsertRowid, ip: req.ip });
     logAudit({ actor_id: result.lastInsertRowid, actor_role: 'participant', action: 'user_registered', resource_type: 'user', resource_id: result.lastInsertRowid, severity: 'info', ip: req.ip });
@@ -57,6 +77,36 @@ router.post('/register', (req, res) => {
     console.error('[AUTH] Register error:', err);
     res.status(500).json({ error: 'Registration failed. Please try again.' });
   }
+});
+
+router.post('/resend-verification', async (req, res) => {
+  const email = String(req.body.email || '').trim().toLowerCase();
+  const response = { message: 'If that account needs verification, instructions have been sent.' };
+  try {
+    const user = db.prepare('SELECT id FROM users WHERE email=? AND email_verified=0 AND is_active=1').get(email);
+    if (user) {
+      const token = randomBytes(32).toString('hex');
+      await sendAccountEmail(email, 'email_verification', token);
+      db.prepare("DELETE FROM account_tokens WHERE user_id=? AND purpose='email_verification'").run(user.id);
+      db.prepare("INSERT INTO account_tokens (user_id,purpose,token_hash,expires_at) VALUES (?,'email_verification',?,datetime('now','+24 hours'))").run(user.id, createHash('sha256').update(token).digest('hex'));
+      if (process.env.NODE_ENV !== 'production') response.verification_token = token;
+    }
+    res.json(response);
+  } catch (err) {
+    console.error('[AUTH] Verification email error:', err);
+    res.status(503).json({ error: 'Could not send verification email. Please try again.' });
+  }
+});
+
+router.get('/config', (req, res) => {
+  res.json({ config: {
+    allow_self_registration: setting('allow_self_registration', 'true') === 'true',
+    session_timeout_minutes: sessionMinutes(),
+    site_name: setting('site_name', 'SymposiHub'),
+    contact_email: setting('contact_email', 'admin@symposium.edu'),
+    payment_mode: process.env.PAYMENT_MODE === 'razorpay' ? 'razorpay' : 'demo',
+    razorpay_key_id: process.env.PAYMENT_MODE === 'razorpay' ? process.env.RAZORPAY_KEY_ID : undefined,
+  } });
 });
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
@@ -83,6 +133,7 @@ router.post('/login', (req, res) => {
     }
 
     const token = issueToken(user);
+    revokePreviousCookieSession(req);
     setCookie(res, token);
     logLogin({ user_id: user.id, email, action: 'login_success', ip: req.ip, user_agent: req.headers['user-agent'] });
     logActivity({ user_id: user.id, role: user.role, action: 'login', resource_type: 'auth', ip: req.ip });
@@ -105,7 +156,8 @@ router.post('/verify-email', (req, res) => {
   res.json({ message: 'Email verified. You can now sign in.' });
 });
 
-router.post('/forgot-password', (req, res) => {
+router.post('/forgot-password', async (req, res) => {
+  try {
   const email = String(req.body.email || '').trim().toLowerCase();
   const user = db.prepare('SELECT id FROM users WHERE email=? AND is_active=1').get(email);
   const response = { message: 'If that account exists, password reset instructions are ready.' };
@@ -113,9 +165,14 @@ router.post('/forgot-password', (req, res) => {
     db.prepare("DELETE FROM account_tokens WHERE user_id=? AND purpose='password_reset'").run(user.id);
     const token = randomBytes(32).toString('hex');
     db.prepare("INSERT INTO account_tokens (user_id,purpose,token_hash,expires_at) VALUES (?,'password_reset',?,datetime('now','+30 minutes'))").run(user.id, createHash('sha256').update(token).digest('hex'));
+    await sendAccountEmail(email, 'password_reset', token);
     if (process.env.NODE_ENV !== 'production') response.reset_token = token;
   }
   res.json(response);
+  } catch (err) {
+    console.error('[AUTH] Password reset email error:', err);
+    res.status(503).json({ error: 'Could not prepare password reset instructions. Please try again.' });
+  }
 });
 
 router.post('/reset-password', (req, res) => {
@@ -134,6 +191,7 @@ router.post('/reset-password', (req, res) => {
 router.post('/mfa/setup', require('../middleware/auth').authenticate, (req, res) => {
   try {
     const user = req.user;
+    if (user.mfa_enabled) return res.status(409).json({ error: 'MFA is already enabled.' });
     const secret = authenticator.generateSecret();
     const otpauth = authenticator.keyuri(user.email, ISSUER, secret);
 
@@ -160,8 +218,9 @@ router.post('/mfa/verify-setup', require('../middleware/auth').authenticate, (re
     if (!isValid) return res.status(400).json({ error: 'Invalid OTP code. Please try again.' });
 
     // Generate backup codes
-    const backupCodes = Array.from({ length: 8 }, () => randomBytes(4).toString('hex').toUpperCase());
-    db.prepare('UPDATE users SET mfa_enabled = 1, mfa_backup_codes = ? WHERE id = ?').run(JSON.stringify(backupCodes), user.id);
+    const backupCodes = Array.from({ length: 8 }, () => randomBytes(8).toString('hex').toUpperCase());
+    const backupHashes = backupCodes.map(value => createHash('sha256').update(value).digest('hex'));
+    db.prepare('UPDATE users SET mfa_enabled = 1, mfa_backup_codes = ? WHERE id = ?').run(JSON.stringify(backupHashes), user.id);
 
     logAudit({ actor_id: user.id, actor_role: user.role, action: 'mfa_enabled', resource_type: 'user', resource_id: user.id, severity: 'info', ip: req.ip });
 
@@ -185,6 +244,7 @@ router.post('/mfa/verify-login', (req, res) => {
 
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(decoded.id);
     if (!user) return res.status(401).json({ error: 'User not found.' });
+    if (!user.is_active || !user.email_verified) return res.status(403).json({ error: 'Account is unavailable.' });
 
     // Check TOTP
     let isValid = false;
@@ -193,7 +253,9 @@ router.post('/mfa/verify-login', (req, res) => {
     // Check backup codes
     if (!isValid && user.mfa_backup_codes) {
       const codes = JSON.parse(user.mfa_backup_codes);
-      const idx = codes.indexOf(code.toUpperCase());
+      const entered = String(code).toUpperCase();
+      const hashed = createHash('sha256').update(entered).digest('hex');
+      const idx = codes.indexOf(hashed) !== -1 ? codes.indexOf(hashed) : codes.indexOf(entered); // Legacy backup codes.
       if (idx !== -1) {
         isValid = true;
         codes.splice(idx, 1); // use once
@@ -207,6 +269,7 @@ router.post('/mfa/verify-login', (req, res) => {
     }
 
     const token = issueToken(user);
+    revokePreviousCookieSession(req);
     setCookie(res, token);
     logLogin({ user_id: user.id, email: user.email, action: 'mfa_success', ip: req.ip });
     logLogin({ user_id: user.id, email: user.email, action: 'login_success', ip: req.ip });
@@ -239,6 +302,11 @@ router.get('/me', require('../middleware/auth').authenticate, (req, res) => {
 
 // ── POST /api/auth/logout ─────────────────────────────────────────────────────
 router.post('/logout', require('../middleware/auth').authenticate, (req, res) => {
+  if (req.body?.expected_user_id != null && Number(req.body.expected_user_id) !== req.user.id) {
+    return res.status(409).json({ error: 'The signed-in account changed. Refresh this page.' });
+  }
+  db.prepare('UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL')
+    .run(Math.floor(Date.now() / 1000), req.token.jti, req.user.id);
   logLogin({ user_id: req.user.id, email: req.user.email, action: 'logout', ip: req.ip });
   res.clearCookie('token');
   res.json({ message: 'Logged out successfully.' });
